@@ -1,6 +1,9 @@
 # reposSync
 
-> 为散落在磁盘各处的 Git 仓库建立一个软链接统一入口。原仓库原地不动 —— 不移动、不复制。
+**中文** | [English](./README.en.md)
+
+> 为散落在磁盘各处的 Git 仓库建立一个软链接统一入口。原仓库原地不动。
+> 由Deepseek V4.1 Flash创建。
 
 `reposSync` 扫描你指定的目录，找出其中所有 Git 仓库（目录里含 `.git` 即为仓库），
 然后在 `~/repos/` 下为每个仓库创建一个同名软链接。
@@ -36,7 +39,7 @@ notes        /home/user/projects/notes
 - 自动剪枝 `node_modules`、`.cache`、`venv` 等噪声目录，扫描亚秒级完成
 - 无读取权限的路径自动跳过并计数，不中断扫描
 - 可选：让 `git init` / `git clone` 出的新仓库**自动收录**，无需手动同步
-- 输出仓库清单 `REPOS_LIST.md`，但**绝不触碰** `README.md`
+- 输出仓库清单 `REPOS_LIST.md`。
 
 ## 环境要求
 
@@ -334,13 +337,6 @@ find ~/repos -maxdepth 1 -type l ! -exec test -e {} \; -print -delete
 **权限不足的目录怎么办？**
 扫描自动跳过无读取权限的路径，并在统计里以「权限不足跳过」计数提示，不会中断。
 
-**`REPOS_LIST.md` 能提交到自己的仓库吗？**
-内容是本机绝对路径，通常没有版本控制价值 —— 本项目的 `.gitignore` 就是这么处理的。
-若确实想留档，删掉 `.gitignore` 里对应的忽略行即可。
-
-**`README.md` 会被脚本覆盖吗？**
-不会。脚本只写 `REPOS_LIST.md`，并且会拒绝把清单文件名设成 `README.md`。
-
 ## 卸载
 
 ```bash
@@ -369,7 +365,7 @@ rm -rf ~/repos                                 # 只删软链接与脚本，原�
 | `link-repos.sh` | ✍️ 人工 | 扫描与建链接的主脚本 |
 | `repos.sh` | ✍️ 人工 | `repos` 命令与 `git` 包装的定义 |
 | `git-templates/` | ✍️ 人工 | git hook 模板 |
-| `README.md` | ✍️ 人工 | 本文件 |
+| `README.md` / `README.en.md` | ✍️ 人工 | 中文 / 英文文档 |
 | `REPOS_LIST.md` | 🤖 本地生成 | 仓库清单，不入库（含本机绝对路径） |
 
 ## 许可

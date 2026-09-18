@@ -5,7 +5,7 @@
 /*
 # 只跟踪工具与文档本身
 !/.gitignore
-!/README.md
+!/README*.md
 !/LICENSE
 !/install.sh
 !/link-repos.sh
