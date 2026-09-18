@@ -6,7 +6,8 @@
 # 只跟踪工具与文档本身
 !/.gitignore
 !/README.md
-!/REPOS_LIST.md
 !/link-repos.sh
 !/repos.sh
 !/git-templates/
+# REPOS_LIST.md 由脚本在使用时本地生成（内容是本机绝对路径），不入库
+/REPOS_LIST.md
