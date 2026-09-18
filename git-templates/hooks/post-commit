@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#
+# post-commit —— 由 ~/.git-templates 提供的 git hook。
+# 新仓库（git init 出来、首次 commit 时）自动在统一入口建立软链接。
+# 详见同目录的 repos-link.sh。
+#
+lib="${BASH_SOURCE[0]:-$0}"
+lib="$(dirname -- "$lib")/repos-link.sh"
+[[ -x "$lib" ]] || lib="$HOME/.git-templates/hooks/repos-link.sh"
+[[ -x "$lib" ]] && "$lib" >/dev/null 2>&1
+exit 0

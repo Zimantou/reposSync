@@ -26,6 +26,7 @@ repos -p       # 只输出真实路径
 | `REPOS_LIST.md` | 🤖 脚本生成 | 仓库清单，每次同步覆盖 |
 | `link-repos.sh` | ✍️ 人工 | 扫描与建链接的主脚本 |
 | `repos.sh` | ✍️ 人工 | `repos` 命令的定义 |
+| `git-templates/` | ✍️ 人工 | git hook 模板（本机 `~/.git-templates` 软链接到此） |
 
 ## 仓库清单
 
@@ -66,15 +67,19 @@ source ~/repos/repos.sh
 
 ### ① 全局 Git 模板 hook
 
+模板就放在本仓库的 `git-templates/` 里：
+
 | 文件 | 说明 |
 |------|------|
-| `~/.git-templates/hooks/repos-link.sh` | 公共逻辑：确保当前仓库在本目录有链接 |
-| `~/.git-templates/hooks/post-commit` | 覆盖 `git init` 场景 —— 首次 commit 时建立链接 |
-| `~/.git-templates/hooks/post-checkout` | 覆盖 `git clone` 场景 —— 检出完成时建立链接 |
+| `git-templates/hooks/repos-link.sh` | 公共逻辑：确保当前仓库在本目录有链接 |
+| `git-templates/hooks/post-commit` | 覆盖 `git init` 场景 —— 首次 commit 时建立链接 |
+| `git-templates/hooks/post-checkout` | 覆盖 `git clone` 场景 —— 检出完成时建立链接 |
 
-启用方式（只需执行一次）：
+启用方式（只需执行一次）。建议把 `~/.git-templates` 软链接到本仓库的 `git-templates/`，
+模板因此受版本控制，不会出现两份副本各自跑偏：
 
 ```bash
+cd "$HOME" && ln -s repos/git-templates .git-templates
 git config --global init.templateDir ~/.git-templates
 ```
 
@@ -92,7 +97,7 @@ git config --global init.templateDir ~/.git-templates
 export LINK_REPOS_NO_GIT_WRAPPER=1             # 关闭 shell 层 git 包装（需重新 source）
 unset -f git                                   # 或在当前 shell 临时解除
 git config --global --unset init.templateDir   # 关闭 hook 自动建链接
-rm -rf ~/.git-templates                        # 彻底删除模板
+rm ~/.git-templates                            # 解除模板软链接（只删链接，仓库里的模板保留）
 ```
 
 关闭后只是不再自动建链接，已有的软链接不受影响。

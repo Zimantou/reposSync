@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# post-checkout —— 由 ~/.git-templates 提供的 git hook。
+# 主要覆盖 `git clone` 这种不经过 commit 就产生新仓库的场景。
+# 参数为 <old-head> <new-head> <is-branch-checkout>，这里不需要关心。
+# 详见同目录的 repos-link.sh。
+#
+lib="${BASH_SOURCE[0]:-$0}"
+lib="$(dirname -- "$lib")/repos-link.sh"
+[[ -x "$lib" ]] || lib="$HOME/.git-templates/hooks/repos-link.sh"
+[[ -x "$lib" ]] && "$lib" >/dev/null 2>&1
+exit 0
