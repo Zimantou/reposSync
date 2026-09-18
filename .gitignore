@@ -1,11 +1,12 @@
 # 入口目录里的一切默认都忽略
 #
-# 原因：本目录下的软链接指向**本机绝对路径**（如 /home/zimantou/GPUTest），
+# 原因：本目录下的软链接指向**创建时的本机绝对路径**（如 $HOME/projects/my-app），
 # 换台机器就是一堆失效链接，没有任何提交价值。
 /*
 # 只跟踪工具与文档本身
 !/.gitignore
 !/README.md
+!/LICENSE
 !/link-repos.sh
 !/repos.sh
 !/git-templates/
