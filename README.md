@@ -51,24 +51,96 @@ notes        /home/user/projects/notes
 
 ```bash
 git clone https://github.com/Zimantou/reposSync.git ~/repos
+~/repos/install.sh --scan
+```
+
+`install.sh` 做两件事：
+
+1. **hook 模板** —— 把 `~/.git-templates` 软链接到仓库里的 `git-templates/`，
+   并设置 `git config --global init.templateDir`，让新仓库自动收录
+2. **shell 接入** —— 打印一行 `source` 命令，加到 shell 配置里即可获得 `repos` 命令
+
+`--scan` 表示安装完立即执行首次扫描（扫描 `$HOME`，最大深度 5 层）。
+
+```console
+$ ~/repos/install.sh --scan
+reposSync 安装
+  仓库目录: /home/user/repos
+
+步骤 1/2 · git hook 模板
+✓ 已建立模板软链接: /home/user/.git-templates -> /home/user/repos/git-templates
+✓ 已设置 init.templateDir = /home/user/.git-templates
+· hook 可执行位正常
+✓ 验证通过：新仓库会带上模板 hook
+
+步骤 2/2 · shell 接入
+
+shell 接入（需要你手动执行）
+  把下面这行追加到 /home/user/.bashrc（或 ~/.bash_aliases）末尾：
+
+    . "/home/user/repos/repos.sh"
+
+  或者重跑本脚本并加上 --write-rc，由它代你写入（会先备份）
+
+下一步
+  执行首次扫描...
+扫描 Git 仓库
+  根目录  : /home/user
+  最大深度: 5
+  链接目录: /home/user/repos
+
+✓  my-app  → /home/user/projects/my-app
+✓  ml-pipeline  → /home/user/work/ml-pipeline
+
+────────────── 统计 ──────────────
+发现 Git 仓库  : 2
+新建软链接     : 2
+...
+安装完成
+```
+
+它**不覆盖任何已存在的东西**，也**默认不改你的 rc 文件**（只打印该加的那一行）。
+想让它代你写入，加 `--write-rc`（会先备份原文件）：
+
+```bash
+~/repos/install.sh --write-rc
+```
+
+### 选项
+
+| 选项 | 作用 |
+|------|------|
+| `--no-hooks` | 跳过 git hook 模板安装 |
+| `--no-shell` | 跳过 shell 接入 |
+| `--write-rc` | 自动把 `source` 行写入 rc 文件（默认只打印） |
+| `--rc FILE` | 指定写入哪个 rc 文件（隐含 `--write-rc`） |
+| `-s, --scan` | 安装完成后立即执行首次扫描 |
+| `-n, --dry-run` | 只预览将要做的操作，不做任何修改 |
+
+### 手动安装
+
+不想跑脚本的话，就这几步：
+
+```bash
+# 1. hook 模板（可选，用于自动收录新仓库）
+ln -s repos/git-templates "$HOME/.git-templates"
+git config --global init.templateDir ~/.git-templates
+
+# 2. shell 接入（获得 repos 命令）
+echo '. "$HOME/repos/repos.sh"' >> ~/.bashrc
+
+# 3. 首次扫描
 ~/repos/link-repos.sh
 ```
 
-第二条命令执行第一次扫描：默认扫描 `$HOME`（最大深度 5 层），并在 `~/repos/` 下建立链接。
+> `~/.git-templates` 已存在时切勿直接覆盖 —— 那里可能有你自己维护的 hook 模板。
+> `install.sh` 遇到这种情况会停下来提示，不会动手。
 
-想先看它会做什么再动手，加上 `-n`：
+不确定会建哪些链接？先预览：
 
 ```bash
 ~/repos/link-repos.sh -n
 ```
-
-### 让 shell 提供 `repos` 命令（推荐）
-
-```bash
-echo '[ -f "$HOME/repos/repos.sh" ] && . "$HOME/repos/repos.sh"' >> ~/.bashrc
-```
-
-重开终端（或 `source ~/.bashrc`）后就有 `repos` 命令了。
 
 ## 使用
 
@@ -157,7 +229,8 @@ $ ~/repos/link-repos.sh
 | `hooks/post-commit` | 覆盖 `git init` 场景 —— 首次 commit 时建立链接 |
 | `hooks/post-checkout` | 覆盖 `git clone` 场景 —— 检出完成时建立链接 |
 
-启用（把模板目录软链接过去，这样它仍受版本控制，不会出现两份副本各自跑偏）：
+跑 `install.sh` 就会装好这一步。手动装的话（把模板目录软链接过去，
+这样它仍受版本控制，不会出现两份副本各自跑偏）：
 
 ```bash
 ln -s repos/git-templates "$HOME/.git-templates"    # 该路径已存在时切勿覆盖，先自行处理
@@ -273,7 +346,7 @@ find ~/repos -maxdepth 1 -type l ! -exec test -e {} \; -print -delete
 ```bash
 git config --global --unset init.templateDir   # 若装过 hook
 rm ~/.git-templates                            # 若建过模板软链接
-# 再从 ~/.bashrc 里删掉 source repos.sh 那一行
+# 再从 ~/.bashrc 里删掉 source repos.sh 那一行（若用过 --write-rc，可回滚它的备份）
 rm -rf ~/repos                                 # 只删软链接与脚本，原仓库不受影响
 ```
 
@@ -292,6 +365,7 @@ rm -rf ~/repos                                 # 只删软链接与脚本，原�
 
 | 文件 | 归属 | 说明 |
 |------|------|------|
+| `install.sh` | ✍️ 人工 | 一键安装：hook 模板 + shell 接入 |
 | `link-repos.sh` | ✍️ 人工 | 扫描与建链接的主脚本 |
 | `repos.sh` | ✍️ 人工 | `repos` 命令与 `git` 包装的定义 |
 | `git-templates/` | ✍️ 人工 | git hook 模板 |

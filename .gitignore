@@ -7,6 +7,7 @@
 !/.gitignore
 !/README.md
 !/LICENSE
+!/install.sh
 !/link-repos.sh
 !/repos.sh
 !/git-templates/
