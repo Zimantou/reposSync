@@ -13,3 +13,5 @@
 !/git-templates/
 # REPOS_LIST.md 由脚本在使用时本地生成（内容是本机绝对路径），不入库
 /REPOS_LIST.md
+# local_env/ 是本地改动记录（改动清单 + 备份 + 还原脚本），也不入库
+/local_env/

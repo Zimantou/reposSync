@@ -44,6 +44,8 @@ real repository:
 - Prunes noisy directories such as `node_modules`, `.cache` and `venv`, so a scan takes well under a second
 - Unreadable paths are skipped and counted instead of aborting the scan
 - Optional: new `git init` / `git clone` repositories get **picked up automatically**
+- Registers the entry point's links in the IDE's `git.scanRepositories`, so the Source Control
+  panel sees every repository (including the ones buried inside a conda environment)
 - Writes a repository listing, `REPOS_LIST.md`
 
 ## Requirements
@@ -198,6 +200,7 @@ marks it with `✗` and shows the dead path.
 ~/repos/link-repos.sh --list-names     # print link names only
 ~/repos/link-repos.sh --list-paths     # print real paths only
 ~/repos/link-repos.sh --no-list        # don't refresh REPOS_LIST.md
+~/repos/link-repos.sh --no-ide-settings # don't sync git.scanRepositories in the IDE settings
 ~/repos/link-repos.sh -h               # full help
 ```
 
@@ -274,6 +277,51 @@ rm ~/.git-templates                            # remove the template symlink (te
 
 Existing symlinks are unaffected.
 
+## IDE integration: making the Source Control panel see every repository
+
+The git extension built into Trae / VS Code **only recognises first-level repositories under
+the workspace root** (`git.repositoryScanMaxDepth` defaults to `1`), and while walking the
+tree it filters directories with `readdir`'s `isDirectory()` — **a symlink is not a
+directory, so it never enters the scan queue**. That means none of the links under `~/repos/`
+are visible to it, and raising the depth does not help: extra depth only reaches
+repositories through their **real paths**, such as the ones under `miniconda3/envs/seed/`.
+
+So after creating links, `link-repos.sh` syncs the entry point's links into the workspace
+setting `git.scanRepositories`:
+
+```jsonc
+// <workspace root>/.vscode/settings.json
+{
+    "git.scanRepositories": [
+        "repos/ContextLadder",
+        "repos/PXDesign",
+        "repos/Protenix"
+    ]
+}
+```
+
+A few notes:
+
+- **Paths must be relative to the workspace root.** Absolute paths are silently ignored by the
+  extension — it only leaves a warning in its log. If the entry point is not inside the
+  workspace root, the script skips the sync and tells you.
+- **Only this one key's array value is rewritten**; the rest of the file (comments included) is
+  preserved byte for byte. If the key is absent the script only tells you — it never edits the
+  file's structure, because inserting a key into JSON means also fixing up commas, and the risk
+  isn't worth it. So the first time you add the key by hand:
+
+  ```jsonc
+  "git.scanRepositories": []
+  ```
+
+  From then on every run maintains it.
+- **Broken links are not registered**, so the panel never lists a repository you can't open.
+- The settings file defaults to `$HOME/.vscode/settings.json` (Trae and VS Code share the same
+  one); override it with `LINK_REPOS_SETTINGS_FILE`. Turn the sync off with
+  `--no-ide-settings` or `LINK_REPOS_IDE_SETTINGS=0`.
+
+After changing the settings, run `Developer: Reload Window` so the extension re-reads them.
+
 ## How it works
 
 For each candidate directory:
@@ -293,7 +341,7 @@ disk traversal with no recursive script calls.
 - **Identification**: a directory containing `.git` counts as a repository
 - **Scope**: `$HOME` by default, up to 5 levels deep
 - **Pruning**: `node_modules`, `__pycache__`, `.cache`, `.local`, `.config`, `venv`, `.venv`,
-  `site-packages`, `.cargo`, `.npm`, `.gradle`, `.vscode-server`, and similar
+  `site-packages`, `.cargo`, `.npm`, `.gradle`, `.vscode-server`, `.trae-cn-server`, and similar
 - **Conda environments are not pruned**: `miniconda3` / `anaconda3` / `miniforge3` are scanned
   normally, because `envs/<name>/` often holds real `git clone`s
 - **Nested repositories are skipped**: repositories inside other repositories (submodules,
@@ -308,6 +356,8 @@ Every command-line option has a matching environment variable:
 | `LINK_REPOS_TARGET` | `-t, --target` | `$HOME/repos` |
 | `LINK_REPOS_DEPTH` | `-d, --depth` | `5` |
 | `LINK_REPOS_LIST_FILE` | — | `REPOS_LIST.md` |
+| `LINK_REPOS_SETTINGS_FILE` | — | `$HOME/.vscode/settings.json` |
+| `LINK_REPOS_IDE_SETTINGS` | `--no-ide-settings` | `1` (set to `0` to disable the sync) |
 | `LINK_REPOS_PRUNE_EXTRA` | — | empty (extra prune names, `:`-separated) |
 | `LINK_REPOS_NO_GIT_WRAPPER` | — | empty (non-empty disables the `git` wrapper) |
 | `NO_COLOR` | — | empty (non-empty disables colored output) |
@@ -330,6 +380,13 @@ Check, in order: whether it sits inside a pruned directory (see "Scan rules"), w
 deeper than the depth limit, and whether it was skipped as a nested repository. Use
 `~/repos/link-repos.sh -n -d 8` to preview a deeper, more complete scan without changing
 anything.
+
+**A repository is missing from the IDE's Source Control panel.**
+First check that it is in the entry point (run `repos`), then check whether the workspace
+setting `git.scanRepositories` lists it. If the key isn't there at all, add
+`"git.scanRepositories": []` by hand and run `link-repos.sh` again. Note that entries must be
+paths **relative to the workspace root** — absolute paths are ignored by the extension.
+Afterwards reload the window. See the "IDE integration" section.
 
 **Why does a link name have a `-1` or `-2` suffix?**
 The entry point already had an entry with that name pointing elsewhere (two repositories with
@@ -381,6 +438,10 @@ rm -rf ~/repos                                 # removes symlinks and scripts; y
   becomes dangling. The script only marks it `✗`, it never deletes it (to avoid implicit
   destructive behavior) — clean up manually, see the FAQ.
 - **The entry point itself is not scanned**, to avoid self-reference.
+- **Only the array value of `git.scanRepositories` is maintained**: the script won't insert the
+  key for you if it is absent (inserting a key into JSON means also fixing up commas, and the
+  risk isn't worth it). The array must also be written one entry per line; other shapes are
+  rejected and the file is left untouched.
 
 ## Files
 

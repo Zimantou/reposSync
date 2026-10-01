@@ -33,6 +33,10 @@ DEFAULT_ROOT="$HOME"
 # 注意：脚本只写这个文件，**绝不动 README.md** —— README.md 由人手工维护。
 LIST_FILE="${LINK_REPOS_LIST_FILE:-REPOS_LIST.md}"
 
+# IDE 工作区设置文件。Trae 与 VS Code 共用同一份：<工作区根>/.vscode/settings.json。
+# 脚本会把入口目录下的链接同步进其中的 git.scanRepositories（见 sync_ide_settings）。
+SETTINGS_FILE="${LINK_REPOS_SETTINGS_FILE:-$HOME/.vscode/settings.json}"
+
 # 扫描时“剪枝”的目录名（命中后不再向下递归）。
 # 需要临时追加时，可设置环境变量 LINK_REPOS_PRUNE_EXTRA="foo:bar"
 PRUNE_NAMES=(
@@ -49,6 +53,7 @@ PRUNE_NAMES=(
   .cargo .rustup .gradle .m2
   .conda .anaconda .julia
   .vscode-server .vscode-server-insiders .cursor-server
+  .trae-cn-server
   .terraform
 )
 
@@ -63,6 +68,7 @@ QUIET=0
 VERBOSE=0
 INCLUDE_NESTED=0
 WRITE_LIST=1
+WRITE_IDE_SETTINGS=1 # 是否把链接同步进 IDE 工作区设置（--no-ide-settings 关闭）
 LINK_ONE=""          # 非空时只处理这一个目录（单目录模式）
 MODE="scan"          # scan | list | list-names | list-paths | help | version
 
@@ -103,6 +109,7 @@ ${c_bld}选项${c_reset}
                           （默认跳过：避免把子模块 / 内部目录当成独立仓库）
       --no-list          不生成/更新仓库清单（${LIST_FILE}）
       --no-readme        同上（旧名，保留兼容）
+      --no-ide-settings  不同步 IDE 设置里的 git.scanRepositories
       --link-one DIR     只处理单个目录 DIR（建链接后立即退出，不扫描根目录）
                          供 git hook / shell 包装调用，速度更快
   -q, --quiet            安静模式：只输出最后的统计信息
@@ -113,16 +120,25 @@ ${c_bld}选项${c_reset}
   -h, --help             显示本帮助
   -V, --version          显示版本号
 
-${c_bld}生成的文件${c_reset}
+${c_bld}生成/同步的文件${c_reset}
   ${PROG} 会在入口目录写一个 ${LIST_FILE}（仓库清单）。
   README.md 是手工维护的说明文档，脚本永远不会读写它。
 
+  ${PROG} 还会把入口目录下的链接同步进 IDE 工作区设置的
+  git.scanRepositories（默认 ${SETTINGS_FILE}）。
+  只有该键的**值**会被重写，文件其余部分（含注释）逐字节保留；
+  键不存在时只提示，不改动文件结构。用 --no-ide-settings 可关闭。
+  为什么必须显式登记：内置 git 扩展扫描仓库时不跟随符号链接，
+  入口目录下的链接它看不见；而登记项只接受**相对工作区根**的路径。
+
 ${c_bld}环境变量${c_reset}
-  LINK_REPOS_TARGET      等价于 --target
-  LINK_REPOS_DEPTH       等价于 --depth
-  LINK_REPOS_LIST_FILE   清单文件名（默认 ${LIST_FILE}）
-  LINK_REPOS_PRUNE_EXTRA 追加剪枝目录名，用 ":" 分隔，如 "dist:build"
-  NO_COLOR               非空时关闭彩色输出
+  LINK_REPOS_TARGET       等价于 --target
+  LINK_REPOS_DEPTH        等价于 --depth
+  LINK_REPOS_LIST_FILE    清单文件名（默认 ${LIST_FILE}）
+  LINK_REPOS_SETTINGS_FILE IDE 设置文件路径（默认 \$HOME/.vscode/settings.json）
+  LINK_REPOS_IDE_SETTINGS 设为 0 时不同步 IDE 设置
+  LINK_REPOS_PRUNE_EXTRA  追加剪枝目录名，用 ":" 分隔，如 "dist:build"
+  NO_COLOR                非空时关闭彩色输出
 
 ${c_bld}退出码${c_reset}
   0 成功   1 部分失败   2 参数/环境错误
@@ -145,6 +161,7 @@ parse_args() {
       -n|--dry-run)       DRY_RUN=1; shift ;;
       -N|--include-nested) INCLUDE_NESTED=1; shift ;;
       --no-list|--no-readme) WRITE_LIST=0; shift ;;
+      --no-ide-settings)  WRITE_IDE_SETTINGS=0; shift ;;
       --link-one)
         [[ $# -ge 2 ]] || { err "选项 $1 需要一个参数（目录）"; exit 2; }
         LINK_ONE="$2"; shift 2 ;;
@@ -382,6 +399,145 @@ MDEOF
   vmsg "$LIST_FILE 已更新: $TARGET_DIR/$LIST_FILE"
 }
 
+# ------------------------------------------------------------------ IDE 设置同步
+# 把入口目录下的链接登记进工作区设置的 git.scanRepositories。
+#
+# 为什么必须显式登记：内置 git 扩展扫描仓库时用 readdir 的 isDirectory()
+# 过滤目录，符号链接返回 false —— 入口目录下的链接一个都进不了扫描队列，
+# repositoryScanMaxDepth 调多大都没用。
+#
+# 为什么必须写相对路径：git.scanRepositories 只接受相对工作区根的路径，
+# 绝对路径会被忽略，只在扩展日志里留一条 warning。
+#
+# 本函数只重写 "git.scanRepositories" 的**值**（方括号之间的内容），
+# 文件其余部分（含注释）逐字节保留；键不存在时只提示，绝不改动文件结构
+# （往 JSON 里插键要处理逗号，风险不对等）。
+# 返回: 0 成功或无需处理 | 1 出错
+sync_ide_settings() {
+  local settings="$SETTINGS_FILE"
+
+  if [[ ! -f "$settings" ]]; then
+    warn "未找到 IDE 设置文件，跳过同步: $settings"
+    return 0
+  fi
+
+  # 工作区根 = <工作区根>/.vscode/settings.json 里的 <工作区根>
+  local ws_root target_abs
+  ws_root="$(realpath -m -- "$(dirname -- "$(dirname -- "$settings")")" 2>/dev/null)" ||
+    ws_root="$(dirname -- "$(dirname -- "$settings")")"
+  target_abs="$(realpath -m -- "$TARGET_DIR" 2>/dev/null)" || target_abs="$TARGET_DIR"
+
+  # 相对路径只对「工作区根之内的入口目录」有意义
+  local rel_dir=""
+  if [[ "$target_abs" == "$ws_root" ]]; then
+    rel_dir=""
+  elif [[ "$target_abs" == "$ws_root"/* ]]; then
+    rel_dir="${target_abs#"$ws_root"/}"
+  else
+    warn "入口目录不在工作区根内（$target_abs ⊄ $ws_root），写不出相对路径，跳过同步"
+    return 0
+  fi
+
+  if ! grep -qE '^[[:space:]]*"git\.scanRepositories"[[:space:]]*:' "$settings"; then
+    warn "IDE 设置里没有 \"git.scanRepositories\" 键，跳过同步: $settings"
+    warn "   加一次即可（之后每次运行都会自动维护它）：\"git.scanRepositories\": [ ]"
+    return 0
+  fi
+
+  # 收集条目：入口目录下的链接按名字排序；失效链接不登记
+  local -a items=()
+  local rec name state
+  while IFS= read -r -d '' rec; do
+    name="${rec%%$'\t'*}"
+    state="${rec##*$'\t'}"
+    if [[ "$state" != "ok" ]]; then
+      vmsg "失效链接不登记: $name"
+      continue
+    fi
+    if [[ -n "$rel_dir" ]]; then items+=("$rel_dir/$name"); else items+=("$name"); fi
+  done < <(collect_links)
+
+  # 缩进跟随键所在行：条目深一级，收尾的 "]" 与键对齐，让生成结果看起来是手写的
+  local key_indent indent
+  key_indent="$(awk '/^[[:space:]]*"git\.scanRepositories"[[:space:]]*:/{match($0,/^[[:space:]]*/);print substr($0,1,RLENGTH);exit}' "$settings")"
+  indent="${key_indent}    "
+
+  local -a lines=()
+  local i
+  for ((i=0; i<${#items[@]}; i++)); do
+    if (( i < ${#items[@]} - 1 )); then
+      lines+=("${indent}\"${items[$i]}\",")
+    else
+      lines+=("${indent}\"${items[$i]}\"")
+    fi
+  done
+
+  local tmp items_file rc=0
+  tmp="$(mktemp -t link-repos-settings.XXXXXX)" || { err "无法创建临时文件，跳过同步"; return 1; }
+  items_file="${tmp}.items"
+  : > "$items_file"
+  for i in ${lines[@]+"${lines[@]}"}; do printf '%s\n' "$i" >> "$items_file"; done
+
+  # 只替换该键的数组内容：保留键行到 "[" 为止的前缀，跳过原数组，收尾行原样保留
+  awk -v itemsfile="$items_file" -v keyind="$key_indent" '
+    BEGIN { while ((getline l < itemsfile) > 0) items[++n] = l; close(itemsfile) }
+    !done && !skipping && match($0, /^[[:space:]]*"git\.scanRepositories"[[:space:]]*:[[:space:]]*\[/) {
+      printf "%s\n", substr($0, 1, RSTART + RLENGTH - 1)
+      for (i = 1; i <= n; i++) print items[i]
+      rest = substr($0, RSTART + RLENGTH)
+      if (rest ~ /^[[:space:]]*$/) { skipping = 1 }
+      else if (rest ~ /^[[:space:]]*\][[:space:]]*,?[[:space:]]*$/) { sub(/^[[:space:]]*/, "", rest); printf "%s%s\n", keyind, rest; done = 1 }
+      else { bad = 1 }
+      next
+    }
+    !done && !skipping && /^[[:space:]]*"git\.scanRepositories"[[:space:]]*:/ { odd = 1 }
+    skipping {
+      if ($0 ~ /^[[:space:]]*\][[:space:]]*,?/) { l = $0; sub(/^[[:space:]]*/, "", l); printf "%s%s\n", keyind, l; skipping = 0; done = 1 }
+      next
+    }
+    { print }
+    END { if (bad) exit 5; if (skipping) exit 3; if (odd) exit 4 }
+  ' "$settings" > "$tmp"
+  rc=$?
+  rm -f -- "$items_file"
+
+  case $rc in
+    0) ;;
+    3) rm -f -- "$tmp"; err "git.scanRepositories 的括号不配对，未修改: $settings"; return 1 ;;
+    4) rm -f -- "$tmp"; err "git.scanRepositories 的 \"[\" 必须与键同一行，未修改: $settings"; return 1 ;;
+    5) rm -f -- "$tmp"; err "git.scanRepositories 不是每行一个条目的写法，未修改: $settings"; return 1 ;;
+    *) rm -f -- "$tmp"; err "解析 IDE 设置失败（awk 退出码 $rc），未修改: $settings"; return 1 ;;
+  esac
+
+  if [[ ! -s "$tmp" ]]; then
+    rm -f -- "$tmp"; err "生成结果为空，未修改: $settings"; return 1
+  fi
+
+  # 内容没变化就不写，避免无谓改动（含 mtime）
+  if cmp -s -- "$settings" "$tmp"; then
+    vmsg "IDE 设置已是最新（${#items[@]} 条）: $settings"
+    rm -f -- "$tmp"
+    return 0
+  fi
+
+  if (( DRY_RUN )); then
+    say "   [dry-run] 将更新 git.scanRepositories（${#items[@]} 条）: $settings"
+    rm -f -- "$tmp"
+    return 0
+  fi
+
+  # 就地覆盖，保留原文件权限与属主（不用 mv，避免 mktemp 的 0600 盖上去）
+  if cp -- "$tmp" "$settings"; then
+    rm -f -- "$tmp"
+    okline "IDE 设置已同步（git.scanRepositories，${#items[@]} 条）: $settings"
+  else
+    rm -f -- "$tmp"
+    err "写入 IDE 设置失败: $settings"
+    return 1
+  fi
+  return 0
+}
+
 # ------------------------------------------------------------------ 单目录模式
 # 只处理一个目录：必要时建链接，并在链接集合发生变化时刷新清单。
 # 供 git 模板 hook 与 shell 包装调用，因此刻意保持静默、快速。
@@ -434,6 +590,10 @@ link_one() {
   # 只在链接集合真的变了的时候重写清单，避免每次 commit 都改动它
   if (( WRITE_LIST )) && (( ! DRY_RUN )) && (( created > 0 || conflicts > 0 )); then
     write_list
+  fi
+  # 链接集合变了，IDE 设置里的登记项也要跟着变（同样是"只在变化时写"）
+  if (( WRITE_IDE_SETTINGS )) && (( ! DRY_RUN )) && (( created > 0 || conflicts > 0 )); then
+    sync_ide_settings
   fi
   return 0
 }
@@ -545,6 +705,11 @@ main() {
   # ---- 仓库清单 ----
   if (( WRITE_LIST )) && (( ! DRY_RUN )) && [[ -d "$TARGET_DIR" ]]; then
     write_list
+  fi
+
+  # ---- IDE 设置同步（git.scanRepositories）----
+  if (( WRITE_IDE_SETTINGS )) && (( ! DRY_RUN )) && [[ -d "$TARGET_DIR" ]]; then
+    sync_ide_settings
   fi
 
   # ---- 统计 ----

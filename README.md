@@ -39,6 +39,8 @@ notes        /home/user/projects/notes
 - 自动剪枝 `node_modules`、`.cache`、`venv` 等噪声目录，扫描亚秒级完成
 - 无读取权限的路径自动跳过并计数，不中断扫描
 - 可选：让 `git init` / `git clone` 出的新仓库**自动收录**，无需手动同步
+- 自动把入口目录里的链接登记进 IDE 的 `git.scanRepositories`，
+  让源代码管理面板看见全部仓库（含藏在 conda 环境里的那几个）
 - 输出仓库清单 `REPOS_LIST.md`。
 
 ## 环境要求
@@ -189,6 +191,7 @@ repos git ml-pipeline log --oneline -3
 ~/repos/link-repos.sh --list-names     # 只输出链接名
 ~/repos/link-repos.sh --list-paths     # 只输出真实路径
 ~/repos/link-repos.sh --no-list        # 不刷新 REPOS_LIST.md
+~/repos/link-repos.sh --no-ide-settings # 不同步 IDE 设置里的 git.scanRepositories
 ~/repos/link-repos.sh -h               # 完整帮助
 ```
 
@@ -261,6 +264,48 @@ rm ~/.git-templates                            # 解除模板软链接（仓库�
 
 已建好的软链接不受影响。
 
+## IDE 集成：让源代码管理面板看见全部仓库
+
+Trae / VS Code 内置的 git 扩展默认**只识别工作区根目录的第一层仓库**
+（`git.repositoryScanMaxDepth` 默认 `1`），而且扫描时用 `readdir` 的 `isDirectory()`
+过滤目录 —— **符号链接不算目录，进不了扫描队列**。所以 `~/repos/` 下的链接
+它一个都看不见，把深度调大也没用：加深只能从**真实路径**触达仓库，
+例如 `miniconda3/envs/seed/` 里的那几个。
+
+`link-repos.sh` 因此在每次建链接之后，把入口目录里的链接同步进工作区设置的
+`git.scanRepositories`：
+
+```jsonc
+// <工作区根>/.vscode/settings.json
+{
+    "git.scanRepositories": [
+        "repos/ContextLadder",
+        "repos/PXDesign",
+        "repos/Protenix"
+    ]
+}
+```
+
+几点说明：
+
+- **路径必须是相对工作区根的**。绝对路径会被扩展直接忽略，只在它的日志里留一条
+  warning。入口目录若不在工作区根之内，脚本会跳过同步并提示。
+- **只重写这一个键的数组值**，文件其余部分（含注释）逐字节保留。
+  设置里没有这个键时只提示、不改动文件结构 —— 往 JSON 里插键要额外处理逗号，
+  风险不对等。所以首次需要你手工加一行：
+
+  ```jsonc
+  "git.scanRepositories": []
+  ```
+
+  之后每次运行都会自动维护它。
+- **失效链接不登记**，免得面板上出现点不开的仓库。
+- 设置文件默认 `$HOME/.vscode/settings.json`（Trae 与 VS Code 共用同一份），
+  可用 `LINK_REPOS_SETTINGS_FILE` 换。用 `--no-ide-settings` 或
+  `LINK_REPOS_IDE_SETTINGS=0` 可关闭同步。
+
+改完设置记得 `Developer: Reload Window`，扩展才会重新读取。
+
 ## 工作原理
 
 对每个候选目录：
@@ -278,7 +323,7 @@ rm ~/.git-templates                            # 解除模板软链接（仓库�
 - **识别**：目录含 `.git` 即视为仓库
 - **范围**：默认 `$HOME`，最大深度 5 层
 - **剪枝**：`node_modules`、`__pycache__`、`.cache`、`.local`、`.config`、`venv`、`.venv`、
-  `site-packages`、`.cargo`、`.npm`、`.gradle`、`.vscode-server` 等
+  `site-packages`、`.cargo`、`.npm`、`.gradle`、`.vscode-server`、`.trae-cn-server` 等
 - **conda 环境不剪枝**：`miniconda3` / `anaconda3` / `miniforge3` 照常扫描，
   因为 `envs/<环境名>/` 下经常放着真正的 `git clone`
 - **跳过嵌套仓库**：仓库内部的仓库（子模块等）默认不收录，用 `-N` 改变
@@ -292,6 +337,8 @@ rm ~/.git-templates                            # 解除模板软链接（仓库�
 | `LINK_REPOS_TARGET` | `-t, --target` | `$HOME/repos` |
 | `LINK_REPOS_DEPTH` | `-d, --depth` | `5` |
 | `LINK_REPOS_LIST_FILE` | — | `REPOS_LIST.md` |
+| `LINK_REPOS_SETTINGS_FILE` | — | `$HOME/.vscode/settings.json` |
+| `LINK_REPOS_IDE_SETTINGS` | `--no-ide-settings` | `1`（设为 `0` 则不同步） |
 | `LINK_REPOS_PRUNE_EXTRA` | — | 空（追加剪枝目录名，用 `:` 分隔） |
 | `LINK_REPOS_NO_GIT_WRAPPER` | — | 空（非空则不定义 `git` 包装） |
 | `NO_COLOR` | — | 空（非空则关闭彩色输出） |
@@ -311,6 +358,12 @@ LINK_REPOS_PRUNE_EXTRA="dist:build:.next" ~/repos/link-repos.sh
 **某个仓库没被扫到，怎么排查？**
 依次检查：是否落在剪枝目录里（见「扫描规则」）、深度是否超过上限、是否被当成嵌套仓库跳过了。
 用 `~/repos/link-repos.sh -n -d 8` 可以预览更深、更全的扫描结果，不会做任何修改。
+
+**IDE 的源代码管理面板里看不到某个仓库？**
+先确认它在入口目录里（`repos` 查看），再看工作区设置的 `git.scanRepositories`
+有没有登记它。若设置里连这个键都没有，手工加一行 `"git.scanRepositories": []`
+再跑一次 `link-repos.sh`。注意登记项必须写成**相对工作区根**的路径，
+绝对路径会被扩展忽略。改完需要重载窗口。详见「IDE 集成」一节。
 
 **链接名后面为什么带 `-1`、`-2`？**
 入口目录里已有同名条目却指向别的路径（不同位置的重名仓库），脚本自动加后缀并警告。
@@ -356,6 +409,9 @@ rm -rf ~/repos                                 # 只删软链接与脚本，原�
 - **不清理失效链接**：原仓库被移走或删除后，软链接会变成悬空链接。脚本只把它标成 `✗`，
   不会自动删除（避免隐式破坏性操作）——需手动清理，见「常见问题」。
 - **不扫描入口目录自身**，避免自我引用。
+- **只维护 `git.scanRepositories` 的数组值**：该键不存在时不会替你插入（往 JSON 里插键
+  要额外处理逗号，风险不对等）。数组也必须是「每行一个条目」的写法，其他写法会被拒绝
+  并保持原文件不变。
 
 ## 文件说明
 
