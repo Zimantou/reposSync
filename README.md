@@ -41,6 +41,8 @@ notes        /home/user/projects/notes
 - 可选：让 `git init` / `git clone` 出的新仓库**自动收录**，无需手动同步
 - 自动把入口目录里的链接登记进 IDE 的 `git.scanRepositories`，
   让源代码管理面板看见全部仓库（含藏在 conda 环境里的那几个）
+- 可选：显式清理失效链接（`--prune-broken` / `repos clean`），
+  且自带「外接盘没挂载时不误删」的保护
 - 输出仓库清单 `REPOS_LIST.md`。
 
 ## 环境要求
@@ -161,6 +163,7 @@ echo '. "$HOME/repos/repos.sh"' >> ~/.bashrc
 | `repos git <名字> <参数>` | 对该仓库执行 git 命令 |
 | `repos open <名字>` | 打印该仓库的真实绝对路径 |
 | `repos sync` | 重新扫描并同步软链接 |
+| `repos clean` | 清理失效链接（目标已被移动或删除的软链接） |
 | `repos help` | 显示帮助 |
 
 ```console
@@ -192,6 +195,7 @@ repos git ml-pipeline log --oneline -3
 ~/repos/link-repos.sh --list-paths     # 只输出真实路径
 ~/repos/link-repos.sh --no-list        # 不刷新 REPOS_LIST.md
 ~/repos/link-repos.sh --no-ide-settings # 不同步 IDE 设置里的 git.scanRepositories
+~/repos/link-repos.sh --prune-broken   # 顺便清理失效链接（配 -n 可先预览）
 ~/repos/link-repos.sh -h               # 完整帮助
 ```
 
@@ -339,6 +343,7 @@ Trae / VS Code 内置的 git 扩展默认**只识别工作区根目录的第一�
 | `LINK_REPOS_LIST_FILE` | — | `REPOS_LIST.md` |
 | `LINK_REPOS_SETTINGS_FILE` | — | `$HOME/.vscode/settings.json` |
 | `LINK_REPOS_IDE_SETTINGS` | `--no-ide-settings` | `1`（设为 `0` 则不同步） |
+| `LINK_REPOS_PRUNE_BROKEN` | `--prune-broken` | `0`（设为 `1` 则清理失效链接） |
 | `LINK_REPOS_PRUNE_EXTRA` | — | 空（追加剪枝目录名，用 `:` 分隔） |
 | `LINK_REPOS_NO_GIT_WRAPPER` | — | 空（非空则不定义 `git` 包装） |
 | `NO_COLOR` | — | 空（非空则关闭彩色输出） |
@@ -376,8 +381,21 @@ LINK_REPOS_PRUNE_EXTRA="dist:build:.next" ~/repos/link-repos.sh
 不会。软链接只是快捷方式，删掉它不会动到原仓库的任何文件。
 
 **列表里有失效链接（`✗`），怎么清理？**
-原仓库被移动或删除后，入口目录里的软链接会变成悬空链接。脚本不会自动删它
-（删除是破坏性操作，不做隐式处理），只在列表里标 `✗`。手动清理：
+原仓库被移动或删除后，入口目录里的软链接会变成悬空链接。**默认不会自动清理**
+（删除是破坏性操作，不做隐式处理），只在列表里标 `✗`。要清理就显式指定：
+
+```bash
+repos clean                              # 清理失效链接
+repos clean -n                           # 先预览会删哪些，不真删
+~/repos/link-repos.sh --prune-broken     # 等价写法
+```
+
+判定失效有一个前提：**链接目标的上级目录必须存在**。外接盘 / 网络盘未挂载时，
+目标的上级目录同样不存在，这种情况只警告、不删 —— 免得拔一次盘就把指向它的链接
+全清掉（重挂载后重扫虽能恢复，但没必要冒这个险）。这类链接在统计里以
+「失效但保留」单独计数。
+
+不想用它，也可以手工清理：
 
 ```bash
 # 先看看有哪些
@@ -406,8 +424,9 @@ rm -rf ~/repos                                 # 只删软链接与脚本，原�
 - **不做增量扫描**：每次都重新遍历。靠 `-maxdepth` 与剪枝控制开销；
   仓库分布很深的场景建议调大 `-d`，并接受更长的扫描时间。
 - **`.git` 存在即认定是仓库**，不校验其是否完整可用（例如中断的 clone 也会被收录）。
-- **不清理失效链接**：原仓库被移走或删除后，软链接会变成悬空链接。脚本只把它标成 `✗`，
-  不会自动删除（避免隐式破坏性操作）——需手动清理，见「常见问题」。
+- **默认不清理失效链接**：原仓库被移走或删除后，软链接会变成悬空链接。脚本只把它标成
+  `✗`，不会自动删除（避免隐式破坏性操作）。需要清理时显式加 `--prune-broken`
+  （或 `repos clean`），见「常见问题」。
 - **不扫描入口目录自身**，避免自我引用。
 - **只维护 `git.scanRepositories` 的数组值**：该键不存在时不会替你插入（往 JSON 里插键
   要额外处理逗号，风险不对等）。数组也必须是「每行一个条目」的写法，其他写法会被拒绝

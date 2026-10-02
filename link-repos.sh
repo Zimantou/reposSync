@@ -68,7 +68,9 @@ QUIET=0
 VERBOSE=0
 INCLUDE_NESTED=0
 WRITE_LIST=1
-WRITE_IDE_SETTINGS=1 # 是否把链接同步进 IDE 工作区设置（--no-ide-settings 关闭）
+WRITE_IDE_SETTINGS="${LINK_REPOS_IDE_SETTINGS:-1}" # 同步 IDE 工作区设置（--no-ide-settings 或 =0 关闭）
+# 是否清理入口目录里指向已不存在目标的软链接（默认关：删除是破坏性操作，不做隐式处理）
+PRUNE_BROKEN="${LINK_REPOS_PRUNE_BROKEN:-0}"
 LINK_ONE=""          # 非空时只处理这一个目录（单目录模式）
 MODE="scan"          # scan | list | list-names | list-paths | help | version
 
@@ -78,6 +80,8 @@ skipped=0            # 已存在且正确，跳过
 conflicts=0          # 发生名称冲突（自动改名）
 nested_skipped=0     # 嵌套仓库被跳过
 errs=0               # 错误数
+pruned=0             # 清理掉的失效链接数
+pruned_held=0        # 因目标的上级目录不存在而保留的失效链接数
 NEEDED_SUFFIX=0
 
 # ------------------------------------------------------------------ 输出工具
@@ -110,6 +114,10 @@ ${c_bld}选项${c_reset}
       --no-list          不生成/更新仓库清单（${LIST_FILE}）
       --no-readme        同上（旧名，保留兼容）
       --no-ide-settings  不同步 IDE 设置里的 git.scanRepositories
+      --prune-broken     清理入口目录里目标已不存在的软链接（默认不清理）
+                         判定为失效需要同时满足：目标的**上级目录存在**、目标本身不存在。
+                         上级目录也不存在时只警告、不删 —— 那是外接盘 / 网络盘
+                         未挂载的典型情形，删了就白删。配合 -n 可先预览。
       --link-one DIR     只处理单个目录 DIR（建链接后立即退出，不扫描根目录）
                          供 git hook / shell 包装调用，速度更快
   -q, --quiet            安静模式：只输出最后的统计信息
@@ -137,6 +145,7 @@ ${c_bld}环境变量${c_reset}
   LINK_REPOS_LIST_FILE    清单文件名（默认 ${LIST_FILE}）
   LINK_REPOS_SETTINGS_FILE IDE 设置文件路径（默认 \$HOME/.vscode/settings.json）
   LINK_REPOS_IDE_SETTINGS 设为 0 时不同步 IDE 设置
+  LINK_REPOS_PRUNE_BROKEN 设为 1 时清理失效链接（等价 --prune-broken）
   LINK_REPOS_PRUNE_EXTRA  追加剪枝目录名，用 ":" 分隔，如 "dist:build"
   NO_COLOR                非空时关闭彩色输出
 
@@ -162,6 +171,7 @@ parse_args() {
       -N|--include-nested) INCLUDE_NESTED=1; shift ;;
       --no-list|--no-readme) WRITE_LIST=0; shift ;;
       --no-ide-settings)  WRITE_IDE_SETTINGS=0; shift ;;
+      --prune-broken)     PRUNE_BROKEN=1; shift ;;
       --link-one)
         [[ $# -ge 2 ]] || { err "选项 $1 需要一个参数（目录）"; exit 2; }
         LINK_ONE="$2"; shift 2 ;;
@@ -538,6 +548,67 @@ sync_ide_settings() {
   return 0
 }
 
+# ------------------------------------------------------------------ 清理失效链接
+# 入口目录里指向已不存在目标的软链接，可以显式清掉（--prune-broken）。
+# 默认不清理：删除是破坏性操作，不做隐式处理。
+#
+# 安全网 —— 只有「目标的上级目录存在、目标本身不存在」才判为真失效。
+# 外接盘 / 网络盘未挂载时，目标的上级目录同样不存在，这时只警告、不删：
+# 重新挂载后重扫虽然能把链接找回来，但没必要冒这个险。
+#
+# 返回: 始终 0（单项失败计入 errs，不中断整轮清理）
+prune_broken_links() {
+  local -a names=() targets=()
+  local rec
+  while IFS= read -r -d '' rec; do
+    [[ "${rec##*$'\t'}" == "broken" ]] || continue
+    names+=("${rec%%$'\t'*}")
+    local rest="${rec#*$'\t'}"
+    targets+=("${rest%%$'\t'*}")
+  done < <(collect_links)
+
+  if (( ${#names[@]} == 0 )); then
+    vmsg "没有失效链接需要清理"
+    return 0
+  fi
+
+  local i link tgt parent
+  for ((i=0; i<${#names[@]}; i++)); do
+    link="$TARGET_DIR/${names[$i]}"
+
+    # 取链接的原始指向（readlink -f 对失效链接直接失败，不能用）
+    if ! tgt="$(readlink -- "$link" 2>/dev/null)" || [[ -z "$tgt" ]]; then
+      warn "读不出链接指向，跳过: $link"
+      ((pruned_held++))
+      continue
+    fi
+    # 相对指向按链接所在目录展开；realpath -m 不要求目标存在
+    [[ "$tgt" == /* ]] || tgt="$(dirname -- "$link")/$tgt"
+    tgt="$(realpath -m -- "$tgt" 2>/dev/null || printf '%s' "$tgt")"
+    parent="$(dirname -- "$tgt")"
+
+    if [[ ! -d "$parent" ]]; then
+      warn "保留（目标的上级目录不存在，可能是磁盘未挂载）: ${names[$i]} → $tgt"
+      ((pruned_held++))
+      continue
+    fi
+
+    if (( DRY_RUN )); then
+      printf '%s\n' "   [dry-run] rm -- $link"
+      ((pruned++))
+      continue
+    fi
+    if rm -- "$link" 2>/dev/null; then
+      okline "已清理失效链接: ${names[$i]}  ${c_cyn}→${c_reset} ${targets[$i]}"
+      ((pruned++))
+    else
+      err "删除失败（权限不足？）: $link"
+      ((errs++))
+    fi
+  done
+  return 0
+}
+
 # ------------------------------------------------------------------ 单目录模式
 # 只处理一个目录：必要时建链接，并在链接集合发生变化时刷新清单。
 # 供 git 模板 hook 与 shell 包装调用，因此刻意保持静默、快速。
@@ -702,6 +773,12 @@ main() {
     esac
   done < <(find "${find_args[@]}" 2>"$errlog")
 
+  # ---- 清理失效链接（仅 --prune-broken）----
+  # 放在扫描之后、写清单之前：清理结果必须反映到清单与 IDE 登记项里。
+  if (( PRUNE_BROKEN )) && [[ -d "$TARGET_DIR" ]]; then
+    prune_broken_links
+  fi
+
   # ---- 仓库清单 ----
   if (( WRITE_LIST )) && (( ! DRY_RUN )) && [[ -d "$TARGET_DIR" ]]; then
     write_list
@@ -722,9 +799,15 @@ main() {
   printf '已存在跳过     : %d\n' "$skipped"
   printf '名称冲突改名   : %d\n' "$conflicts"
   printf '嵌套仓库跳过   : %d\n' "$nested_skipped"
+  if (( PRUNE_BROKEN )); then
+    printf '失效链接清理   : %d\n' "$pruned"
+  fi
   printf '错误           : %d\n' "$errs"
   if (( perm > 0 )); then
     printf '%s\n' "${c_yel}权限不足跳过   : ${perm} 个路径（无读取权限，已忽略）${c_reset}"
+  fi
+  if (( pruned_held > 0 )); then
+    printf '%s\n' "${c_yel}失效但保留     : ${pruned_held} 个（目标的上级目录不存在，可能是磁盘未挂载）${c_reset}"
   fi
   printf '%s\n' "${c_bld}──────────────────────────────────${c_reset}"
   (( DRY_RUN )) && printf '%s\n' "${c_yel}[dry-run] 未做任何修改；去掉 -n 即可真正执行。${c_reset}"

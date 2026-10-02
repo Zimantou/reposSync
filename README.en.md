@@ -46,6 +46,8 @@ real repository:
 - Optional: new `git init` / `git clone` repositories get **picked up automatically**
 - Registers the entry point's links in the IDE's `git.scanRepositories`, so the Source Control
   panel sees every repository (including the ones buried inside a conda environment)
+- Optional: explicit cleanup of dangling links (`--prune-broken` / `repos clean`), with built-in
+  protection against deleting links whose drive merely isn't mounted
 - Writes a repository listing, `REPOS_LIST.md`
 
 ## Requirements
@@ -169,6 +171,7 @@ Not sure which links would be created? Preview first:
 | `repos git <name> <args>` | Run a git command against that repository |
 | `repos open <name>` | Print that repository's real absolute path |
 | `repos sync` | Re-scan and sync the symlinks |
+| `repos clean` | Remove dangling links (targets that were moved or deleted) |
 | `repos help` | Show help |
 
 ```console
@@ -201,6 +204,7 @@ marks it with `✗` and shows the dead path.
 ~/repos/link-repos.sh --list-paths     # print real paths only
 ~/repos/link-repos.sh --no-list        # don't refresh REPOS_LIST.md
 ~/repos/link-repos.sh --no-ide-settings # don't sync git.scanRepositories in the IDE settings
+~/repos/link-repos.sh --prune-broken   # also clean up dangling links (add -n to preview)
 ~/repos/link-repos.sh -h               # full help
 ```
 
@@ -358,6 +362,7 @@ Every command-line option has a matching environment variable:
 | `LINK_REPOS_LIST_FILE` | — | `REPOS_LIST.md` |
 | `LINK_REPOS_SETTINGS_FILE` | — | `$HOME/.vscode/settings.json` |
 | `LINK_REPOS_IDE_SETTINGS` | `--no-ide-settings` | `1` (set to `0` to disable the sync) |
+| `LINK_REPOS_PRUNE_BROKEN` | `--prune-broken` | `0` (set to `1` to clean up dangling links) |
 | `LINK_REPOS_PRUNE_EXTRA` | — | empty (extra prune names, `:`-separated) |
 | `LINK_REPOS_NO_GIT_WRAPPER` | — | empty (non-empty disables the `git` wrapper) |
 | `NO_COLOR` | — | empty (non-empty disables colored output) |
@@ -400,9 +405,23 @@ They're skipped by default; use `-N` to include them all.
 No. A symlink is just a shortcut — deleting it leaves the repository's files untouched.
 
 **The listing shows broken links (`✗`) — how do I clean them up?**
-When a repository is moved or deleted, its symlink becomes dangling. The script won't delete it
-for you (deletion is destructive, so it isn't done implicitly) — it only marks it `✗`. To clean
-up manually:
+When a repository is moved or deleted, its symlink becomes dangling. It is **not cleaned up
+automatically** (deletion is destructive, so it isn't done implicitly) — the script only marks
+it `✗`. To clean up, ask for it explicitly:
+
+```bash
+repos clean                              # remove dangling links
+repos clean -n                           # preview what would be removed first
+~/repos/link-repos.sh --prune-broken     # equivalent
+```
+
+One precondition: the **parent directory of the link's target must exist** for the link to
+count as broken. When an external or network drive is unmounted, that parent directory is
+missing too, so this case is only warned about and left alone — otherwise unplugging a drive
+once would wipe every link pointing at it (re-mounting and re-scanning would restore them, but
+there's no reason to take that risk). Such links are counted separately as "kept".
+
+Prefer to do it by hand? That works too:
 
 ```bash
 # See which ones are broken
@@ -434,9 +453,10 @@ rm -rf ~/repos                                 # removes symlinks and scripts; y
   and pruning; if your repositories live very deep, raise `-d` and accept a slower scan.
 - **The mere presence of `.git` makes a repository** — no check that it is complete and usable
   (an interrupted clone is picked up too).
-- **Dangling links are not cleaned up**: once a repository is moved or deleted, the symlink
-  becomes dangling. The script only marks it `✗`, it never deletes it (to avoid implicit
-  destructive behavior) — clean up manually, see the FAQ.
+- **Dangling links are not cleaned up by default**: once a repository is moved or deleted, the
+  symlink becomes dangling. The script only marks it `✗`; it never deletes it implicitly (to
+  avoid destructive behavior). Ask for it explicitly with `--prune-broken` (or `repos clean`),
+  see the FAQ.
 - **The entry point itself is not scanned**, to avoid self-reference.
 - **Only the array value of `git.scanRepositories` is maintained**: the script won't insert the
   key for you if it is absent (inserting a key into JSON means also fixing up commas, and the

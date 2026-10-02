@@ -6,6 +6,7 @@
 # 用法：
 #     repos                 # 表格列出所有链接及真实路径
 #     repos sync            # 重新扫描并同步软链接（新建仓库后用它更新索引）
+#     repos clean           # 清理指向已不存在仓库的失效链接
 #     repos -p              # 只输出真实路径（可管道给 xargs / fzf）
 #     repos -n              # 只输出链接名
 #     repos -g              # 额外显示每个仓库的当前分支和最后一次提交
@@ -32,6 +33,7 @@ repos() {
         git)                  mode="git"; shift ;;
         open|path)            mode="open"; shift ;;
         sync|update|refresh|index) mode="sync"; shift ;;
+        clean|prune)          mode="clean"; shift ;;
         -h|--help|help)       mode="help"; shift ;;
         *) mode="table" ;;
     esac
@@ -43,6 +45,7 @@ repos —— ~/repos 统一仓库入口的使用助手
 用法:
   repos                   表格列出所有链接及真实路径
   repos sync              重新扫描并同步软链接（新建 Git 仓库后用这个更新索引）
+  repos clean             清理失效链接（目标已被移动或删除的软链接）
   repos -g                表格 + 每个仓库的当前分支和最后一次提交
   repos -p                只输出真实路径（可管道给 xargs / fzf）
   repos -n                只输出链接名
@@ -55,6 +58,14 @@ repos —— ~/repos 统一仓库入口的使用助手
   repos sync 之后的多余参数会原样传给 link-repos.sh，例如:
      repos sync -n        # 只预览，不做修改
      repos sync -q        # 安静模式，只输出统计
+
+  同理 repos clean 的多余参数也会传下去，例如:
+     repos clean -n       # 只预览会删哪些，不真删
+
+清理失效链接的判定:
+  只有「链接目标的上级目录存在、目标本身不存在」才算失效。
+  上级目录也不存在时只警告不删 —— 那是外接盘 / 网络盘未挂载的典型情形，
+  误删会丢登记项，所以留给你自己判断。
 
 自动同步:
   source 本文件后，`git init` / `git clone` 成功时会自动调用
@@ -92,6 +103,13 @@ EOF
                 return 1
             fi
             "$SYNC_SCRIPT" "$@"
+            ;;
+        clean)
+            if [[ ! -x "$SYNC_SCRIPT" ]]; then
+                echo "repos: 找不到同步脚本 $SYNC_SCRIPT" >&2
+                return 1
+            fi
+            "$SYNC_SCRIPT" --prune-broken "$@"
             ;;
         cd)
             local name; name="$(_repos_resolve "${1:?用法: repos cd <名字>}")" || return 1
